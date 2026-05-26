@@ -105,6 +105,10 @@ async function signIn() {
   console.log(data);
 }
 
+  alert("Signed in!");
+  console.log(data);
+}
+
   async function signOut() {
     await supabase.auth.signOut();
   }
@@ -494,7 +498,7 @@ D. choice
       </div>
     </div>
   );
-}
+
 
 const styles = {
   page: {
