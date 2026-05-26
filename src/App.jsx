@@ -11,72 +11,23 @@ import {
   Trash2,
   BookOpen,
   Sparkles,
+  Download,
+  RotateCcw,
+  Edit3,
+  Save,
+  X,
+  LogOut,
 } from "lucide-react";
+import { supabase } from "./supabase";
 
-const STORAGE_KEY = "quiz-platform-data-v4";
-
-const starterSubjects = [
-  {
-    id: crypto.randomUUID(),
-    name: "Animal Physiology",
-    folders: [
-      {
-        id: crypto.randomUUID(),
-        name: "Muscle System",
-        questions: [
-          {
-            id: crypto.randomUUID(),
-            prompt: "What directly triggers skeletal muscle contraction?",
-            choices: [
-              "ATP binding to myosin",
-              "Ca²⁺ binding to troponin",
-              "Na⁺ leaving the cell",
-              "O₂ binding to hemoglobin",
-            ],
-            answers: [1],
-            explanation:
-              "Ca²⁺ binds to troponin, which moves tropomyosin away from actin and allows actin-myosin crossbridge formation.",
-          },
-          {
-            id: crypto.randomUUID(),
-            prompt: "Which statements are true about skeletal muscle contraction?",
-            choices: [
-              "Ca²⁺ binds to troponin",
-              "ATP is needed for crossbridge cycling",
-              "Myosin directly binds oxygen",
-              "Actin and myosin interact during contraction",
-            ],
-            answers: [0, 1, 3],
-            explanation:
-              "Ca²⁺ exposes actin binding sites, ATP supports crossbridge cycling, and actin-myosin interaction produces contraction.",
-          },
-        ],
-      },
-    ],
-  },
-  {
-    id: crypto.randomUUID(),
-    name: "GRE Vocabulary",
-    folders: [
-      {
-        id: crypto.randomUUID(),
-        name: "High Frequency Words",
-        questions: [],
-      },
-    ],
-  },
-];
-
-function makeId() {
-  return crypto.randomUUID();
-}
+const WRONG_KEY = "quiz-platform-wrong-v1";
 
 function cleanLine(line) {
   return line.replace(/\r/g, "").trim();
 }
 
 function parseChoice(line) {
-  const match = line.match(/^([A-Ha-h])[\.|\)|:|、]\s+(.+)$/);
+  const match = line.match(/^([A-Ha-h])[\.\):、]\s+(.+)$/);
   if (!match) return null;
   return { letter: match[1].toUpperCase(), text: match[2].trim() };
 }
@@ -90,11 +41,15 @@ function isExplanationLine(line) {
 }
 
 function stripAnswerLabel(line) {
-  return line.replace(/^(答案|正确答案|answer|correct answer|correct answers|correct|ans|key)\s*[:：\-]?\s*/i, "").trim();
+  return line
+    .replace(/^(答案|正确答案|answer|correct answer|correct answers|correct|ans|key)\s*[:：\-]?\s*/i, "")
+    .trim();
 }
 
 function stripExplanationLabel(line) {
-  return line.replace(/^(解析|解释|explanation|reason|rationale|why)\s*[:：\-]?\s*/i, "").trim();
+  return line
+    .replace(/^(解析|解释|explanation|reason|rationale|why)\s*[:：\-]?\s*/i, "")
+    .trim();
 }
 
 function removeQuestionPrefix(line) {
@@ -106,11 +61,11 @@ function removeQuestionPrefix(line) {
 }
 
 function extractAnswerIndexes(answerText, choices) {
-  const text = answerText.trim();
+  const text = String(answerText || "").trim();
   const indexes = new Set();
+  const letters = text.match(/[A-Ha-h]/g) || [];
 
-  const separatedLetters = text.match(/[A-Ha-h]/g) || [];
-  for (const letter of separatedLetters) {
+  for (const letter of letters) {
     const idx = letter.toUpperCase().charCodeAt(0) - 65;
     if (idx >= 0 && idx < choices.length) indexes.add(idx);
   }
@@ -126,12 +81,12 @@ function extractAnswerIndexes(answerText, choices) {
   return indexes.size ? Array.from(indexes).sort((a, b) => a - b) : [0];
 }
 
-function hasAnswer(lines) {
+function blockHasAnswer(lines) {
   return lines.some((line) => isAnswerLine(line));
 }
 
-function hasChoices(lines) {
-  return lines.filter((line) => parseChoice(line)).length >= 2;
+function blockChoiceCount(lines) {
+  return lines.filter((line) => parseChoice(line)).length;
 }
 
 function splitIntoQuestionBlocks(text) {
@@ -147,19 +102,30 @@ function splitIntoQuestionBlocks(text) {
 
   for (const line of lines) {
     const choice = parseChoice(line);
-    const explicitQuestionStart = /^(\d+\s*[\.\)]|Question\s*\d*[:：\.\)]|Q\d*[:：\.\)]|第\s*\d+\s*题)/i.test(line);
+    const explicitQuestionStart =
+      /^(\d+\s*[\.\)]|Question\s*\d*[:：\.\)]|Q\d*[:：\.\)]|第\s*\d+\s*题)/i.test(line);
 
     const startsNewByExplicitQuestion =
-      explicitQuestionStart && current.length > 0 && (hasChoices(current) || hasAnswer(current));
+      explicitQuestionStart &&
+      current.length > 0 &&
+      (blockChoiceCount(current) >= 2 || blockHasAnswer(current));
 
     const startsNewByChoiceRestart =
       choice &&
       choice.letter === "A" &&
       current.length > 0 &&
       currentChoiceLetters.size >= 2 &&
-      hasAnswer(current);
+      blockHasAnswer(current);
 
-    if (startsNewByExplicitQuestion || startsNewByChoiceRestart) {
+    const startsNewByAnswerThenNewPrompt =
+      !choice &&
+      !isAnswerLine(line) &&
+      !isExplanationLine(line) &&
+      current.length > 0 &&
+      blockChoiceCount(current) >= 2 &&
+      blockHasAnswer(current);
+
+    if (startsNewByExplicitQuestion || startsNewByChoiceRestart || startsNewByAnswerThenNewPrompt) {
       blocks.push(current);
       current = [line];
       currentChoiceLetters = new Set(choice ? [choice.letter] : []);
@@ -174,9 +140,7 @@ function splitIntoQuestionBlocks(text) {
 }
 
 function parseQuestions(rawText) {
-  const blocks = splitIntoQuestionBlocks(rawText);
-
-  return blocks
+  return splitIntoQuestionBlocks(rawText)
     .map((lines) => {
       const promptLines = [];
       const choices = [];
@@ -210,7 +174,7 @@ function parseQuestions(rawText) {
           answerRaw = line;
         } else if (mode === "explanation") {
           explanationLines.push(line);
-        } else if (mode === "prompt" || mode === "choices") {
+        } else {
           promptLines.push(removeQuestionPrefix(line));
         }
       }
@@ -218,13 +182,10 @@ function parseQuestions(rawText) {
       const prompt = promptLines.join(" ").trim();
       if (!prompt || choices.length < 2) return null;
 
-      const answers = extractAnswerIndexes(answerRaw, choices);
-
       return {
-        id: makeId(),
         prompt,
         choices,
-        answers,
+        answers: extractAnswerIndexes(answerRaw, choices),
         explanation: explanationLines.join(" ").trim() || "No explanation added yet.",
       };
     })
@@ -239,39 +200,46 @@ function arraysEqual(a, b) {
   return sortedA.every((value, index) => value === sortedB[index]);
 }
 
-function normalizeQuestion(question) {
-  if (question.answers) return question;
-  if (typeof question.answer === "number") return { ...question, answers: [question.answer] };
-  return { ...question, answers: [0] };
+function answersToLetters(answers) {
+  return answers.map((idx) => String.fromCharCode(65 + idx)).join(", ");
 }
 
-function App() {
-  const [subjects, setSubjects] = useState(() => {
+export default function App() {
+  const [session, setSession] = useState(null);
+  const [authMode, setAuthMode] = useState("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const [subjects, setSubjects] = useState([]);
+  const [folders, setFolders] = useState([]);
+  const [questions, setQuestions] = useState([]);
+
+  const [selectedSubjectId, setSelectedSubjectId] = useState("");
+  const [selectedFolderId, setSelectedFolderId] = useState("");
+
+  const [answers, setAnswers] = useState({});
+  const [checkedQuestions, setCheckedQuestions] = useState({});
+  const [wrongIds, setWrongIds] = useState(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      return saved
-        ? JSON.parse(saved).map((subject) => ({
-            ...subject,
-            folders: subject.folders.map((folder) => ({
-              ...folder,
-              questions: folder.questions.map(normalizeQuestion),
-            })),
-          }))
-        : starterSubjects;
+      return JSON.parse(localStorage.getItem(WRONG_KEY) || "[]");
     } catch {
-      return starterSubjects;
+      return [];
     }
   });
 
-  const [selectedSubjectId, setSelectedSubjectId] = useState(subjects[0]?.id || "");
-  const [selectedFolderId, setSelectedFolderId] = useState(subjects[0]?.folders[0]?.id || "");
-  const [answers, setAnswers] = useState({});
-  const [checkedQuestions, setCheckedQuestions] = useState({});
   const [search, setSearch] = useState("");
   const [showImport, setShowImport] = useState(true);
+  const [showBackup, setShowBackup] = useState(false);
+  const [showWrongOnly, setShowWrongOnly] = useState(false);
+  const [backupText, setBackupText] = useState("");
+
   const [newSubjectName, setNewSubjectName] = useState("");
   const [newFolderName, setNewFolderName] = useState("");
   const [message, setMessage] = useState("");
+
+  const [editingQuestionId, setEditingQuestionId] = useState(null);
+  const [editDraft, setEditDraft] = useState(null);
+
   const [importText, setImportText] = useState(`Which statements are true about skeletal muscle contraction?
 A. Ca²⁺ binds to troponin
 B. ATP is needed for crossbridge cycling
@@ -289,484 +257,667 @@ D. O₂ binding to hemoglobin
 解析：Ca²⁺ binds to troponin.`);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(subjects));
-  }, [subjects]);
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+    });
+
+    return () => {
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(WRONG_KEY, JSON.stringify(wrongIds));
+  }, [wrongIds]);
+
+  useEffect(() => {
+    if (session?.user?.id) {
+      loadCloudData(session.user.id);
+    }
+  }, [session]);
 
   const selectedSubject = subjects.find((s) => s.id === selectedSubjectId) || subjects[0];
-  const selectedFolder = selectedSubject?.folders.find((f) => f.id === selectedFolderId) || selectedSubject?.folders[0];
+  const selectedFolders = folders.filter((f) => f.subject_id === selectedSubject?.id);
+  const selectedFolder =
+    selectedFolders.find((f) => f.id === selectedFolderId) || selectedFolders[0];
+
+  const selectedQuestions = questions.filter((q) => q.folder_id === selectedFolder?.id);
 
   const filteredQuestions = useMemo(() => {
-    if (!selectedFolder) return [];
-    return selectedFolder.questions.filter((q) =>
-      q.prompt.toLowerCase().includes(search.toLowerCase())
-    );
-  }, [selectedFolder, search]);
+    return selectedQuestions.filter((q) => {
+      const matchesSearch = q.prompt.toLowerCase().includes(search.toLowerCase());
+      const matchesWrong = !showWrongOnly || wrongIds.includes(q.id);
+      return matchesSearch && matchesWrong;
+    });
+  }, [selectedQuestions, search, showWrongOnly, wrongIds]);
 
-  const answeredCount = selectedFolder?.questions.filter((q) => answers[q.id]?.length > 0).length || 0;
-  const correctCount = selectedFolder?.questions.filter((q) => arraysEqual(answers[q.id], q.answers)).length || 0;
+  const answeredCount = selectedQuestions.filter(
+    (q) => checkedQuestions[q.id] || answers[q.id]?.length > 0
+  ).length;
 
-  function selectSubject(subject) {
-    setSelectedSubjectId(subject.id);
-    setSelectedFolderId(subject.folders[0]?.id || "");
+  const correctCount = selectedQuestions.filter(
+    (q) => checkedQuestions[q.id] && arraysEqual(answers[q.id], q.answers)
+  ).length;
+
+  const wrongCountInFolder = selectedQuestions.filter((q) => wrongIds.includes(q.id)).length;
+
+  async function handleAuth() {
+    if (!email || !password) {
+      setMessage("Please enter email and password.");
+      return;
+    }
+
+    const fn = authMode === "signin" ? supabase.auth.signInWithPassword : supabase.auth.signUp;
+    const { error } = await fn({ email, password });
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setMessage(authMode === "signin" ? "Signed in." : "Account created. Check email if confirmation is required.");
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    setSubjects([]);
+    setFolders([]);
+    setQuestions([]);
+    setSelectedSubjectId("");
+    setSelectedFolderId("");
+  }
+
+  async function loadCloudData(userId) {
+    const [subjectRes, folderRes, questionRes] = await Promise.all([
+      supabase.from("subjects").select("*").eq("user_id", userId).order("created_at"),
+      supabase.from("folders").select("*").eq("user_id", userId).order("created_at"),
+      supabase.from("questions").select("*").eq("user_id", userId).order("created_at"),
+    ]);
+
+    if (subjectRes.error || folderRes.error || questionRes.error) {
+      setMessage(subjectRes.error?.message || folderRes.error?.message || questionRes.error?.message);
+      return;
+    }
+
+    let loadedSubjects = subjectRes.data || [];
+    let loadedFolders = folderRes.data || [];
+    let loadedQuestions = (questionRes.data || []).map((q) => ({
+      ...q,
+      choices: Array.isArray(q.choices) ? q.choices : [],
+      answers: Array.isArray(q.answers) ? q.answers : [0],
+    }));
+
+    if (loadedSubjects.length === 0) {
+      const { data: newSubject, error: sErr } = await supabase
+        .from("subjects")
+        .insert({ user_id: userId, name: "Animal Physiology" })
+        .select()
+        .single();
+
+      if (sErr) {
+        setMessage(sErr.message);
+        return;
+      }
+
+      const { data: newFolder, error: fErr } = await supabase
+        .from("folders")
+        .insert({ user_id: userId, subject_id: newSubject.id, name: "Default Folder" })
+        .select()
+        .single();
+
+      if (fErr) {
+        setMessage(fErr.message);
+        return;
+      }
+
+      loadedSubjects = [newSubject];
+      loadedFolders = [newFolder];
+      loadedQuestions = [];
+    }
+
+    setSubjects(loadedSubjects);
+    setFolders(loadedFolders);
+    setQuestions(loadedQuestions);
+
+    const firstSubject = loadedSubjects[0];
+    const firstFolder = loadedFolders.find((f) => f.subject_id === firstSubject.id);
+
+    setSelectedSubjectId(firstSubject?.id || "");
+    setSelectedFolderId(firstFolder?.id || "");
+    setAnswers({});
+    setCheckedQuestions({});
+  }
+
+  function selectSubject(subjectId) {
+    const firstFolder = folders.find((f) => f.subject_id === subjectId);
+    setSelectedSubjectId(subjectId);
+    setSelectedFolderId(firstFolder?.id || "");
     setAnswers({});
     setCheckedQuestions({});
     setMessage("");
   }
 
-  function addSubject() {
+  async function addSubject() {
     const name = newSubjectName.trim();
-    if (!name) return;
-    const folder = { id: makeId(), name: "Default Folder", questions: [] };
-    const subject = { id: makeId(), name, folders: [folder] };
+    if (!name || !session?.user?.id) return;
+
+    const { data: subject, error } = await supabase
+      .from("subjects")
+      .insert({ user_id: session.user.id, name })
+      .select()
+      .single();
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    const { data: folder, error: folderError } = await supabase
+      .from("folders")
+      .insert({ user_id: session.user.id, subject_id: subject.id, name: "Default Folder" })
+      .select()
+      .single();
+
+    if (folderError) {
+      setMessage(folderError.message);
+      return;
+    }
+
     setSubjects((prev) => [...prev, subject]);
+    setFolders((prev) => [...prev, folder]);
     setSelectedSubjectId(subject.id);
     setSelectedFolderId(folder.id);
     setNewSubjectName("");
   }
 
-  function renameSubject() {
+  async function renameSubject() {
     if (!selectedSubject) return;
     const nextName = prompt("Rename subject:", selectedSubject.name);
     if (!nextName || !nextName.trim()) return;
+
+    const { error } = await supabase
+      .from("subjects")
+      .update({ name: nextName.trim() })
+      .eq("id", selectedSubject.id);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
     setSubjects((prev) =>
-      prev.map((subject) =>
-        subject.id === selectedSubject.id ? { ...subject, name: nextName.trim() } : subject
-      )
+      prev.map((s) => (s.id === selectedSubject.id ? { ...s, name: nextName.trim() } : s))
     );
   }
 
-  function deleteSubject() {
+  async function deleteSubject() {
     if (!selectedSubject) return;
     if (subjects.length <= 1) {
       alert("You need at least one subject.");
       return;
     }
+
     const ok = confirm(`Delete subject "${selectedSubject.name}" and all folders/questions inside it?`);
     if (!ok) return;
-    const updated = subjects.filter((subject) => subject.id !== selectedSubject.id);
-    setSubjects(updated);
-    setSelectedSubjectId(updated[0].id);
-    setSelectedFolderId(updated[0].folders[0]?.id || "");
-    setAnswers({});
-    setCheckedQuestions({});
+
+    const removedFolderIds = folders.filter((f) => f.subject_id === selectedSubject.id).map((f) => f.id);
+    const removedQuestionIds = questions.filter((q) => removedFolderIds.includes(q.folder_id)).map((q) => q.id);
+
+    const { error } = await supabase.from("subjects").delete().eq("id", selectedSubject.id);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    const nextSubjects = subjects.filter((s) => s.id !== selectedSubject.id);
+    const nextFolders = folders.filter((f) => f.subject_id !== selectedSubject.id);
+    const nextQuestions = questions.filter((q) => !removedFolderIds.includes(q.folder_id));
+
+    setSubjects(nextSubjects);
+    setFolders(nextFolders);
+    setQuestions(nextQuestions);
+    setWrongIds((prev) => prev.filter((id) => !removedQuestionIds.includes(id)));
+
+    const nextSubject = nextSubjects[0];
+    const nextFolder = nextFolders.find((f) => f.subject_id === nextSubject.id);
+
+    setSelectedSubjectId(nextSubject.id);
+    setSelectedFolderId(nextFolder?.id || "");
   }
 
-  function addFolder() {
+  async function addFolder() {
     const name = newFolderName.trim();
-    if (!name || !selectedSubject) return;
-    const folder = { id: makeId(), name, questions: [] };
-    setSubjects((prev) =>
-      prev.map((subject) =>
-        subject.id === selectedSubject.id
-          ? { ...subject, folders: [...subject.folders, folder] }
-          : subject
-      )
-    );
+    if (!name || !selectedSubject || !session?.user?.id) return;
+
+    const { data: folder, error } = await supabase
+      .from("folders")
+      .insert({
+        user_id: session.user.id,
+        subject_id: selectedSubject.id,
+        name,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setFolders((prev) => [...prev, folder]);
     setSelectedFolderId(folder.id);
     setNewFolderName("");
     setAnswers({});
     setCheckedQuestions({});
   }
 
-  function renameFolder(folderId) {
-    if (!selectedSubject) return;
-    const folder = selectedSubject.folders.find((f) => f.id === folderId);
+  async function renameFolder(folderId) {
+    const folder = folders.find((f) => f.id === folderId);
     if (!folder) return;
+
     const nextName = prompt("Rename folder:", folder.name);
     if (!nextName || !nextName.trim()) return;
-    setSubjects((prev) =>
-      prev.map((subject) =>
-        subject.id === selectedSubject.id
-          ? {
-              ...subject,
-              folders: subject.folders.map((f) =>
-                f.id === folderId ? { ...f, name: nextName.trim() } : f
-              ),
-            }
-          : subject
-      )
+
+    const { error } = await supabase
+      .from("folders")
+      .update({ name: nextName.trim() })
+      .eq("id", folderId);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setFolders((prev) =>
+      prev.map((f) => (f.id === folderId ? { ...f, name: nextName.trim() } : f))
     );
   }
 
-  function deleteFolder(folderId) {
-    if (!selectedSubject) return;
-    if (selectedSubject.folders.length <= 1) {
+  async function deleteFolder(folderId) {
+    const currentSubjectFolders = folders.filter((f) => f.subject_id === selectedSubject?.id);
+    if (currentSubjectFolders.length <= 1) {
       alert("You need at least one folder in each subject.");
       return;
     }
-    const folder = selectedSubject.folders.find((f) => f.id === folderId);
+
+    const folder = folders.find((f) => f.id === folderId);
     if (!folder) return;
+
     const ok = confirm(`Delete folder "${folder.name}" and all questions inside it?`);
     if (!ok) return;
-    const remainingFolders = selectedSubject.folders.filter((f) => f.id !== folderId);
-    setSubjects((prev) =>
-      prev.map((subject) =>
-        subject.id === selectedSubject.id ? { ...subject, folders: remainingFolders } : subject
-      )
-    );
+
+    const removedQuestionIds = questions.filter((q) => q.folder_id === folderId).map((q) => q.id);
+
+    const { error } = await supabase.from("folders").delete().eq("id", folderId);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    const nextFolders = folders.filter((f) => f.id !== folderId);
+    const nextQuestions = questions.filter((q) => q.folder_id !== folderId);
+
+    setFolders(nextFolders);
+    setQuestions(nextQuestions);
+    setWrongIds((prev) => prev.filter((id) => !removedQuestionIds.includes(id)));
+
     if (selectedFolderId === folderId) {
-      setSelectedFolderId(remainingFolders[0]?.id || "");
+      const nextFolder = nextFolders.find((f) => f.subject_id === selectedSubject.id);
+      setSelectedFolderId(nextFolder?.id || "");
       setAnswers({});
       setCheckedQuestions({});
     }
   }
+    async function importQuestions() {
+    if (!selectedFolder || !session?.user?.id) return;
 
-  function importQuestions() {
     const parsed = parseQuestions(importText);
+
     if (!parsed.length) {
       setMessage("No valid questions detected. Please include choices like A. B. C. D. plus an answer line.");
       return;
     }
 
-    setSubjects((prev) =>
-      prev.map((subject) =>
-        subject.id === selectedSubject.id
-          ? {
-              ...subject,
-              folders: subject.folders.map((folder) =>
-                folder.id === selectedFolder.id
-                  ? { ...folder, questions: [...folder.questions, ...parsed] }
-                  : folder
-              ),
-            }
-          : subject
-      )
-    );
+    const rows = parsed.map((q) => ({
+      user_id: session.user.id,
+      folder_id: selectedFolder.id,
+      prompt: q.prompt,
+      choices: q.choices,
+      answers: q.answers,
+      explanation: q.explanation,
+    }));
 
+    const { data, error } = await supabase
+      .from("questions")
+      .insert(rows)
+      .select();
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setQuestions((prev) => [...prev, ...(data || [])]);
     setImportText("");
     setShowImport(false);
-    setMessage(`Imported ${parsed.length} question${parsed.length > 1 ? "s" : ""} into ${selectedFolder.name}.`);
+    setMessage(`Imported ${data.length} question${data.length > 1 ? "s" : ""} into ${selectedFolder.name}.`);
   }
 
-  function deleteQuestion(questionId) {
-    setSubjects((prev) =>
-      prev.map((subject) =>
-        subject.id === selectedSubject.id
-          ? {
-              ...subject,
-              folders: subject.folders.map((folder) =>
-                folder.id === selectedFolder.id
-                  ? { ...folder, questions: folder.questions.filter((q) => q.id !== questionId) }
-                  : folder
-              ),
-            }
-          : subject
-      )
-    );
+  async function deleteQuestion(questionId) {
+    const { error } = await supabase.from("questions").delete().eq("id", questionId);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setQuestions((prev) => prev.filter((q) => q.id !== questionId));
+    setWrongIds((prev) => prev.filter((id) => id !== questionId));
   }
 
-  function toggleAnswer(questionId, choiceIndex, isMultiple) {
-    setAnswers((prev) => {
-      const current = prev[questionId] || [];
-
-      if (!isMultiple) {
-        setCheckedQuestions((checked) => ({ ...checked, [questionId]: true }));
-        return { ...prev, [questionId]: [choiceIndex] };
-      }
-
-      setCheckedQuestions((checked) => ({ ...checked, [questionId]: false }));
-      const next = current.includes(choiceIndex)
-        ? current.filter((idx) => idx !== choiceIndex)
-        : [...current, choiceIndex];
-      return { ...prev, [questionId]: next };
+  function startEditQuestion(question) {
+    setEditingQuestionId(question.id);
+    setEditDraft({
+      prompt: question.prompt,
+      choicesText: question.choices.join("\n"),
+      answersText: answersToLetters(question.answers),
+      explanation: question.explanation || "",
     });
   }
 
-  function checkMultipleAnswer(questionId) {
-    setCheckedQuestions((prev) => ({ ...prev, [questionId]: true }));
+  function cancelEditQuestion() {
+    setEditingQuestionId(null);
+    setEditDraft(null);
   }
 
-  function resetDemo() {
-    localStorage.removeItem(STORAGE_KEY);
-    setSubjects(starterSubjects);
-    setSelectedSubjectId(starterSubjects[0].id);
-    setSelectedFolderId(starterSubjects[0].folders[0].id);
+  async function saveEditQuestion(question) {
+    if (!editDraft?.prompt.trim()) {
+      alert("Question cannot be empty.");
+      return;
+    }
+
+    const nextChoices = editDraft.choicesText
+      .split("\n")
+      .map((choice) => choice.trim())
+      .filter(Boolean);
+
+    if (nextChoices.length < 2) {
+      alert("A question needs at least two choices.");
+      return;
+    }
+
+    const nextAnswers = extractAnswerIndexes(editDraft.answersText, nextChoices);
+
+    const updatePayload = {
+      prompt: editDraft.prompt.trim(),
+      choices: nextChoices,
+      answers: nextAnswers,
+      explanation: editDraft.explanation.trim() || "No explanation added yet.",
+    };
+
+    const { error } = await supabase
+      .from("questions")
+      .update(updatePayload)
+      .eq("id", question.id);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setQuestions((prev) =>
+      prev.map((q) => (q.id === question.id ? { ...q, ...updatePayload } : q))
+    );
+
+    setAnswers((prev) => {
+      const copy = { ...prev };
+      delete copy[question.id];
+      return copy;
+    });
+
+    setCheckedQuestions((prev) => {
+      const copy = { ...prev };
+      delete copy[question.id];
+      return copy;
+    });
+
+    cancelEditQuestion();
+  }
+
+  function markWrongIfNeeded(questionId, isCorrect) {
+    if (isCorrect) {
+      setWrongIds((prev) => prev.filter((id) => id !== questionId));
+    } else {
+      setWrongIds((prev) => (prev.includes(questionId) ? prev : [...prev, questionId]));
+    }
+  }
+
+  function toggleAnswer(question, choiceIndex) {
+    const isMultiple = question.answers.length > 1;
+
+    setAnswers((prev) => {
+      const current = prev[question.id] || [];
+
+      if (!isMultiple) {
+        const next = [choiceIndex];
+        const correct = arraysEqual(next, question.answers);
+        markWrongIfNeeded(question.id, correct);
+        setCheckedQuestions((checked) => ({ ...checked, [question.id]: true }));
+        return { ...prev, [question.id]: next };
+      }
+
+      setCheckedQuestions((checked) => ({ ...checked, [question.id]: false }));
+
+      const next = current.includes(choiceIndex)
+        ? current.filter((idx) => idx !== choiceIndex)
+        : [...current, choiceIndex];
+
+      return { ...prev, [question.id]: next };
+    });
+  }
+
+  function checkMultipleAnswer(question) {
+    const current = answers[question.id] || [];
+    const correct = arraysEqual(current, question.answers);
+
+    markWrongIfNeeded(question.id, correct);
+
+    setCheckedQuestions((prev) => ({
+      ...prev,
+      [question.id]: true,
+    }));
+  }
+
+  function resetProgress() {
     setAnswers({});
     setCheckedQuestions({});
-    setMessage("Demo restored.");
+    setMessage("Progress reset for this session.");
+  }
+
+  function clearWrongBook() {
+    const ok = confirm("Clear all wrong-question records?");
+    if (!ok) return;
+
+    setWrongIds([]);
+    setShowWrongOnly(false);
+    setMessage("Wrong book cleared.");
+  }
+
+  function exportBackup() {
+    const exportData = subjects.map((subject) => ({
+      ...subject,
+      folders: folders
+        .filter((folder) => folder.subject_id === subject.id)
+        .map((folder) => ({
+          ...folder,
+          questions: questions.filter((question) => question.folder_id === folder.id),
+        })),
+    }));
+
+    const data = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([data], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+
+    a.href = url;
+    a.download = "quiz-platform-backup.json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    URL.revokeObjectURL(url);
+    setMessage("Backup downloaded.");
+  }
+
+  async function importBackup() {
+    if (!session?.user?.id) return;
+
+    try {
+      const parsed = JSON.parse(backupText);
+
+      if (!Array.isArray(parsed)) {
+        alert("Invalid backup format.");
+        return;
+      }
+
+      for (const subject of parsed) {
+        const { data: newSubject, error: subjectError } = await supabase
+          .from("subjects")
+          .insert({
+            user_id: session.user.id,
+            name: subject.name || "Imported Subject",
+          })
+          .select()
+          .single();
+
+        if (subjectError) throw subjectError;
+
+        for (const folder of subject.folders || []) {
+          const { data: newFolder, error: folderError } = await supabase
+            .from("folders")
+            .insert({
+              user_id: session.user.id,
+              subject_id: newSubject.id,
+              name: folder.name || "Imported Folder",
+            })
+            .select()
+            .single();
+
+          if (folderError) throw folderError;
+
+          const importedQuestions = (folder.questions || []).map((q) => ({
+            user_id: session.user.id,
+            folder_id: newFolder.id,
+            prompt: q.prompt,
+            choices: q.choices,
+            answers: q.answers || [q.answer ?? 0],
+            explanation: q.explanation || "No explanation added yet.",
+          }));
+
+          if (importedQuestions.length) {
+            const { error: questionError } = await supabase
+              .from("questions")
+              .insert(importedQuestions);
+
+            if (questionError) throw questionError;
+          }
+        }
+      }
+
+      setBackupText("");
+      setShowBackup(false);
+      await loadCloudData(session.user.id);
+      setMessage("Backup imported successfully.");
+    } catch (err) {
+      setMessage(err.message || "Could not import backup.");
+    }
+  }
+
+  async function resetCloudData() {
+    const ok = confirm("Delete ALL your cloud quiz data? This cannot be undone unless you exported a backup.");
+    if (!ok || !session?.user?.id) return;
+
+    const { error } = await supabase
+      .from("subjects")
+      .delete()
+      .eq("user_id", session.user.id);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setSubjects([]);
+    setFolders([]);
+    setQuestions([]);
+    setAnswers({});
+    setCheckedQuestions({});
+    setWrongIds([]);
+    await loadCloudData(session.user.id);
+    setMessage("Cloud data reset.");
+  }
+
+  if (!session) {
+    return (
+      <div className="page">
+        <style>{baseStyles}</style>
+
+        <div className="auth-card">
+          <h1>Quiz Platform</h1>
+          <p className="muted">Sign in to save your subjects, folders, and questions in the cloud.</p>
+
+          <input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email"
+          />
+
+          <input
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            type="password"
+          />
+
+          <button className="primary full" onClick={handleAuth}>
+            {authMode === "signin" ? "Sign In" : "Create Account"}
+          </button>
+
+          <button
+            className="secondary full"
+            onClick={() => setAuthMode(authMode === "signin" ? "signup" : "signin")}
+          >
+            {authMode === "signin" ? "Need an account? Sign up" : "Already have an account? Sign in"}
+          </button>
+
+          {message && <div className="message">{message}</div>}
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="page">
-      <style>{`
-        * { box-sizing: border-box; }
-        body { margin: 0; }
-        .page { min-height: 100vh; background: #f8fafc; color: #0f172a; font-family: Inter, Arial, sans-serif; padding: 32px; }
-        .container { max-width: 1280px; margin: 0 auto; }
-        .wide { max-width: 1500px; }
-        .top-toolbar { display: flex; gap: 14px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
-        .toolbar-group { display: grid; gap: 7px; }
-        .toolbar-group.grow { flex: 1; min-width: 360px; }
-        .toolbar-label { display: flex; gap: 6px; align-items: center; color: #64748b; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; }
-        select { border: 1px solid #cbd5e1; border-radius: 14px; padding: 11px 12px; background: white; font-weight: 800; min-width: 210px; }
-        .add-group { grid-template-columns: 150px auto; align-items: end; }
-        .practice-layout { display: block; }
-        .card { background: white; border: 1px solid #e2e8f0; border-radius: 24px; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04); }
-        .card-pad { padding: 20px; }
-        .sidebar-title, .section-title { display: flex; align-items: center; gap: 10px; font-weight: 800; color: #475569; margin-bottom: 14px; }
-        .subject-btn { width: 100%; border: none; border-radius: 16px; padding: 13px 14px; margin-bottom: 10px; text-align: left; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-weight: 700; }
-        .subject-btn.active { background: #111827; color: white; }
-        .subject-btn:not(.active) { background: #f1f5f9; color: #334155; }
-        .subject-btn:not(.active):hover { background: #e2e8f0; }
-        .mini-form { background: #f8fafc; padding: 12px; border-radius: 18px; margin-top: 16px; display: grid; gap: 8px; }
-        input, textarea { border: 1px solid #cbd5e1; outline: none; border-radius: 14px; padding: 11px 12px; font-size: 14px; width: 100%; background: white; }
-        input:focus, textarea:focus { border-color: #64748b; }
-        button { font-family: inherit; }
-        .primary { border: none; background: #111827; color: white; border-radius: 14px; padding: 11px 16px; cursor: pointer; font-weight: 800; display: inline-flex; gap: 8px; align-items: center; justify-content: center; }
-        .secondary { border: none; background: #f1f5f9; color: #334155; border-radius: 14px; padding: 11px 16px; cursor: pointer; font-weight: 800; display: inline-flex; gap: 8px; align-items: center; justify-content: center; }
-        .top-grid { display: grid; grid-template-columns: 1fr auto; gap: 18px; align-items: center; }
-        .stats { display: grid; grid-template-columns: repeat(3, 100px); gap: 10px; }
-        .wide-stats { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
-        .stat { background: #f8fafc; border-radius: 18px; padding: 14px; text-align: center; }
-        .stat-number { font-size: 22px; font-weight: 900; }
-        .stat-label { font-size: 12px; color: #64748b; margin-top: 2px; }
-        .folder-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 18px; }
-        .folder-row.compact { margin-top: 0; max-height: 46px; overflow: auto; }
-        .folder-chip { border: none; padding: 10px 14px; border-radius: 999px; cursor: pointer; font-weight: 800; display: inline-flex; align-items: center; gap: 8px; }
-        .tiny-action { border: none; background: rgba(15,23,42,.08); color: inherit; border-radius: 8px; padding: 3px 7px; cursor: pointer; font-weight: 900; }
-        .tiny-action:hover { background: rgba(15,23,42,.16); }
-        .subject-tools { display: flex; gap: 6px; align-items: center; }
-        .folder-chip.active { background: #111827; color: white; }
-        .folder-chip:not(.active) { background: #f1f5f9; color: #475569; }
-        .import-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; cursor: pointer; }
-        .import-box textarea { min-height: 260px; margin-top: 14px; line-height: 1.5; }
-        .message { margin-top: 12px; background: #ecfeff; color: #155e75; padding: 12px 14px; border-radius: 16px; font-weight: 700; }
-        .search-wrap { position: relative; }
-        .search-icon { position: absolute; top: 12px; left: 12px; color: #94a3b8; }
-        .search-input { padding-left: 40px; }
-        .question { padding: 30px; margin-bottom: 18px; }
-        .q-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 16px; }
-        .q-number { color: #94a3b8; font-size: 12px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 8px; }
-        .q-prompt { font-size: 23px; font-weight: 850; line-height: 1.55; max-width: 1200px; }
-        .type-label { display: inline-flex; margin-top: 10px; background: #eef2ff; color: #3730a3; padding: 6px 10px; border-radius: 999px; font-size: 12px; font-weight: 900; }
-        .choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-        .choice { border: 1px solid #cbd5e1; background: white; border-radius: 18px; padding: 18px 20px; text-align: left; cursor: pointer; font-weight: 750; line-height: 1.5; font-size: 16px; }
-        .choice.selected { outline: 2px solid #111827; background: #f8fafc; }
-        .choice.correct { background: #dcfce7; border-color: #86efac; color: #166534; }
-        .choice.wrong { background: #fee2e2; border-color: #fca5a5; color: #991b1b; }
-        .badge { display: inline-flex; gap: 6px; align-items: center; padding: 7px 10px; border-radius: 999px; font-size: 13px; font-weight: 900; white-space: nowrap; }
-        .badge.correct { background: #dcfce7; color: #166534; }
-        .badge.wrong { background: #fee2e2; color: #991b1b; }
-        .explanation { margin-top: 14px; background: #f8fafc; border-radius: 16px; padding: 14px; color: #334155; line-height: 1.55; }
-        .check-row { display: flex; justify-content: flex-end; margin-top: 14px; }
-        .hint { margin-top: 10px; color: #64748b; font-size: 13px; font-weight: 700; }
-        .delete { border: none; background: #f8fafc; color: #64748b; cursor: pointer; border-radius: 12px; padding: 9px; }
-        .delete:hover { background: #fee2e2; color: #991b1b; }
-        .empty { text-align: center; padding: 48px; color: #64748b; }
-        @media (max-width: 900px) { .top-toolbar { display: grid; } .toolbar-group.grow { min-width: 0; } .add-group { grid-template-columns: 1fr; } .stats { grid-template-columns: repeat(3, 1fr); } .choices { grid-template-columns: 1fr; } .q-prompt { font-size: 20px; } .page { padding: 16px; } }
-      `}</style>
+      <style>{baseStyles}</style>
 
-      <div className="container wide">
+      <div className="container">
         <div className="top-toolbar card card-pad">
           <div className="toolbar-group">
-            <div className="toolbar-label"><Folder size={16} /> Subject</div>
+            <div className="toolbar-label">
+              <Folder size={16} /> Subject
+            </div>
+
             <select
               value={selectedSubjectId}
-              onChange={(e) => {
-                const subject = subjects.find((s) => s.id === e.target.value);
-                if (subject) selectSubject(subject);
-              }}
+              onChange={(e) => selectSubject(e.target.value)}
             >
               {subjects.map((subject) => (
-                <option key={subject.id} value={subject.id}>{subject.name}</option>
-              ))}
-            </select>
-            <div className="subject-tools">
-              <button className="tiny-action" onClick={renameSubject} title="Rename subject">✎ Rename</button>
-              <button className="tiny-action" onClick={deleteSubject} title="Delete subject">× Delete</button>
-            </div>
-          </div>
-
-          <div className="toolbar-group grow">
-            <div className="toolbar-label"><BookOpen size={16} /> Folder</div>
-            <div className="folder-row compact">
-              {selectedSubject?.folders.map((folder) => (
-                <button
-                  key={folder.id}
-                  className={`folder-chip ${folder.id === selectedFolderId ? "active" : ""}`}
-                  onClick={() => {
-                    setSelectedFolderId(folder.id);
-                    setAnswers({});
-                    setCheckedQuestions({});
-                    setMessage("");
-                  }}
-                >
-                  <span>{folder.name}</span>
-                  <button
-                    className="tiny-action"
-                    title="Rename folder"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      renameFolder(folder.id);
-                    }}
-                  >
-                    ✎
-                  </button>
-                  <button
-                    className="tiny-action"
-                    title="Delete folder"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteFolder(folder.id);
-                    }}
-                  >
-                    ×
-                  </button>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="toolbar-group add-group">
-            <input
-              value={newSubjectName}
-              onChange={(e) => setNewSubjectName(e.target.value)}
-              placeholder="New subject"
-            />
-            <button className="secondary" onClick={addSubject}><Plus size={15} /> Subject</button>
-          </div>
-
-          <div className="toolbar-group add-group">
-            <input
-              value={newFolderName}
-              onChange={(e) => setNewFolderName(e.target.value)}
-              placeholder="New folder"
-            />
-            <button className="primary" onClick={addFolder}><Plus size={15} /> Folder</button>
-          </div>
-        </div>
-
-        <div className="practice-layout">
-          <main>
-            <section className="card card-pad slim-stats" style={{ marginBottom: 18 }}>
-              <div className="stats wide-stats">
-                <div className="stat"><div className="stat-number">{selectedFolder?.questions.length || 0}</div><div className="stat-label">Questions</div></div>
-                <div className="stat"><div className="stat-number">{answeredCount}</div><div className="stat-label">Answered</div></div>
-                <div className="stat"><div className="stat-number">{correctCount}</div><div className="stat-label">Correct</div></div>
-              </div>
-            </section>
-
-            <section className="card card-pad import-box" style={{ marginBottom: 18 }}>
-              <div className="import-header" onClick={() => setShowImport((v) => !v)}>
-                <div>
-                  <div className="section-title" style={{ marginBottom: 4 }}><Sparkles size={18} /> Paste & Auto Import</div>
-                  <div style={{ color: "#64748b", fontSize: 14 }}>
-                    Supports no-number questions, single-choice, multiple-choice, 答案/解析, and Answer/Explanation.
-                  </div>
-                </div>
-                {showImport ? <ChevronDown size={22} /> : <ChevronRight size={22} />}
-              </div>
-
-              {showImport && (
-                <>
-                  <textarea
-                    value={importText}
-                    onChange={(e) => setImportText(e.target.value)}
-                    placeholder={`Paste like this:\nQuestion text\nA. choice\nB. choice\nC. choice\nD. choice\n答案：A, C\n解析：your explanation\n\nNext question text\nA. choice\nB. choice\n答案：B\n解析：your explanation`}
-                  />
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginTop: 12 }}>
-                    <div style={{ color: "#64748b", fontSize: 14 }}>
-                      Import target: <b>{selectedSubject?.name} / {selectedFolder?.name}</b>
-                    </div>
-                    <button className="primary" onClick={importQuestions}><Upload size={16} /> Import Questions</button>
-                  </div>
-                </>
-              )}
-              {message && <div className="message">{message}</div>}
-            </section>
-
-            <section className="card card-pad" style={{ marginBottom: 18 }}>
-              <div className="search-wrap">
-                <Search className="search-icon" size={18} />
-                <input
-                  className="search-input"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search questions in this folder..."
-                />
-              </div>
-            </section>
-
-            {filteredQuestions.length === 0 ? (
-              <section className="card empty">No questions in this folder yet. Open Paste & Auto Import to add some.</section>
-            ) : (
-              filteredQuestions.map((question, index) => {
-                const chosen = answers[question.id] || [];
-                const isMultiple = question.answers.length > 1;
-                const isChecked = checkedQuestions[question.id] === true;
-                const isAnswered = isMultiple ? isChecked : chosen.length > 0;
-                const isCorrect = isAnswered && arraysEqual(chosen, question.answers);
-
-                return (
-                  <section className="card question" key={question.id}>
-                    <div className="q-head">
-                      <div>
-                        <div className="q-number">Question {index + 1}</div>
-                        <div className="q-prompt">{question.prompt}</div>
-                        <span className="type-label">{isMultiple ? "Multiple choice" : "Single choice"}</span>
-                      </div>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        {isAnswered && (
-                          <span className={`badge ${isCorrect ? "correct" : "wrong"}`}>
-                            {isCorrect ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
-                            {isCorrect ? "Correct" : "Incorrect"}
-                          </span>
-                        )}
-                        <button className="delete" onClick={() => deleteQuestion(question.id)} title="Delete question"><Trash2 size={17} /></button>
-                      </div>
-                    </div>
-
-                    <div className="choices">
-                      {question.choices.map((choice, choiceIndex) => {
-                        const selected = chosen.includes(choiceIndex);
-                        const correct = question.answers.includes(choiceIndex);
-                        let className = "choice";
-
-                        if (selected && !isAnswered) className += " selected";
-                        if (isAnswered && correct) className += " correct";
-                        if (isAnswered && selected && !correct) className += " wrong";
-                        if (isAnswered && selected) className += " selected";
-
-                        return (
-                          <button
-                            key={`${question.id}-${choiceIndex}`}
-                            className={className}
-                            onClick={() => toggleAnswer(question.id, choiceIndex, isMultiple)}
-                          >
-                            {isMultiple ? (selected ? "☑" : "☐") : ""} {String.fromCharCode(65 + choiceIndex)}. {choice}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {isMultiple && !isChecked && (
-                      <>
-                        <div className="hint">Select all answers you think are correct, then check.</div>
-                        <div className="check-row">
-                          <button
-                            className="primary"
-                            onClick={() => checkMultipleAnswer(question.id)}
-                            disabled={chosen.length === 0}
-                            style={{ opacity: chosen.length === 0 ? 0.5 : 1, cursor: chosen.length === 0 ? "not-allowed" : "pointer" }}
-                          >
-                            Check Answer
-                          </button>
-                        </div>
-                      </>
-                    )}
-
-                    {isAnswered && (
-                      <div className="explanation"><b>Explanation:</b> {question.explanation}</div>
-                    )}
-                  </section>
-                );
-              })
-            )}
-          </main>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export default App;
+                <option key={subject.id} value={subject.id}>
+                  {subject.name}
+               
