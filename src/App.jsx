@@ -74,18 +74,36 @@ export default function App() {
   }
 
   async function signUp() {
-    await supabase.auth.signUp({
-      email,
-      password,
-    });
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+  });
+
+  if (error) {
+    alert(error.message);
+    console.error(error);
+    return;
   }
 
-  async function signIn() {
-    await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+  alert("Account created. If email confirmation is on, check your email.");
+  console.log(data);
+}
+
+async function signIn() {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+
+  if (error) {
+    alert(error.message);
+    console.error(error);
+    return;
   }
+
+  alert("Signed in!");
+  console.log(data);
+}
 
   async function signOut() {
     await supabase.auth.signOut();
