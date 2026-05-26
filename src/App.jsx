@@ -105,9 +105,6 @@ async function signIn() {
   console.log(data);
 }
 
-  alert("Signed in!");
-  console.log(data);
-}
 
   async function signOut() {
     await supabase.auth.signOut();
@@ -500,6 +497,7 @@ D. choice
   );
 
 
+
 const styles = {
   page: {
     minHeight: "100vh",
@@ -625,3 +623,4 @@ const styles = {
     lineHeight: 1.5,
   },
 };
+}
