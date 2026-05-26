@@ -916,8 +916,3 @@ D. O₂ binding to hemoglobin
             <select
               value={selectedSubjectId}
               onChange={(e) => selectSubject(e.target.value)}
-            >
-              {subjects.map((subject) => (
-                <option key={subject.id} value={subject.id}>
-                  {subject.name}
-               
