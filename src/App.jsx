@@ -266,6 +266,7 @@ function App() {
   const [selectedSubjectId, setSelectedSubjectId] = useState(subjects[0]?.id || "");
   const [selectedFolderId, setSelectedFolderId] = useState(subjects[0]?.folders[0]?.id || "");
   const [answers, setAnswers] = useState({});
+  const [checkedQuestions, setCheckedQuestions] = useState({});
   const [search, setSearch] = useState("");
   const [showImport, setShowImport] = useState(true);
   const [newSubjectName, setNewSubjectName] = useState("");
@@ -308,6 +309,7 @@ D. O₂ binding to hemoglobin
     setSelectedSubjectId(subject.id);
     setSelectedFolderId(subject.folders[0]?.id || "");
     setAnswers({});
+    setCheckedQuestions({});
     setMessage("");
   }
 
@@ -336,6 +338,7 @@ D. O₂ binding to hemoglobin
     setSelectedFolderId(folder.id);
     setNewFolderName("");
     setAnswers({});
+    setCheckedQuestions({});
   }
 
   function importQuestions() {
@@ -385,13 +388,22 @@ D. O₂ binding to hemoglobin
   function toggleAnswer(questionId, choiceIndex, isMultiple) {
     setAnswers((prev) => {
       const current = prev[questionId] || [];
-      if (!isMultiple) return { ...prev, [questionId]: [choiceIndex] };
 
+      if (!isMultiple) {
+        setCheckedQuestions((checked) => ({ ...checked, [questionId]: true }));
+        return { ...prev, [questionId]: [choiceIndex] };
+      }
+
+      setCheckedQuestions((checked) => ({ ...checked, [questionId]: false }));
       const next = current.includes(choiceIndex)
         ? current.filter((idx) => idx !== choiceIndex)
         : [...current, choiceIndex];
       return { ...prev, [questionId]: next };
     });
+  }
+
+  function checkMultipleAnswer(questionId) {
+    setCheckedQuestions((prev) => ({ ...prev, [questionId]: true }));
   }
 
   function resetDemo() {
@@ -400,6 +412,7 @@ D. O₂ binding to hemoglobin
     setSelectedSubjectId(starterSubjects[0].id);
     setSelectedFolderId(starterSubjects[0].folders[0].id);
     setAnswers({});
+    setCheckedQuestions({});
     setMessage("Demo restored.");
   }
 
@@ -455,13 +468,15 @@ D. O₂ binding to hemoglobin
         .type-label { display: inline-flex; margin-top: 10px; background: #eef2ff; color: #3730a3; padding: 6px 10px; border-radius: 999px; font-size: 12px; font-weight: 900; }
         .choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
         .choice { border: 1px solid #cbd5e1; background: white; border-radius: 18px; padding: 18px 20px; text-align: left; cursor: pointer; font-weight: 750; line-height: 1.5; font-size: 16px; }
-        .choice.selected { outline: 2px solid #111827; }
+        .choice.selected { outline: 2px solid #111827; background: #f8fafc; }
         .choice.correct { background: #dcfce7; border-color: #86efac; color: #166534; }
         .choice.wrong { background: #fee2e2; border-color: #fca5a5; color: #991b1b; }
         .badge { display: inline-flex; gap: 6px; align-items: center; padding: 7px 10px; border-radius: 999px; font-size: 13px; font-weight: 900; white-space: nowrap; }
         .badge.correct { background: #dcfce7; color: #166534; }
         .badge.wrong { background: #fee2e2; color: #991b1b; }
         .explanation { margin-top: 14px; background: #f8fafc; border-radius: 16px; padding: 14px; color: #334155; line-height: 1.55; }
+        .check-row { display: flex; justify-content: flex-end; margin-top: 14px; }
+        .hint { margin-top: 10px; color: #64748b; font-size: 13px; font-weight: 700; }
         .delete { border: none; background: #f8fafc; color: #64748b; cursor: pointer; border-radius: 12px; padding: 9px; }
         .delete:hover { background: #fee2e2; color: #991b1b; }
         .empty { text-align: center; padding: 48px; color: #64748b; }
@@ -495,6 +510,7 @@ D. O₂ binding to hemoglobin
                   onClick={() => {
                     setSelectedFolderId(folder.id);
                     setAnswers({});
+                    setCheckedQuestions({});
                     setMessage("");
                   }}
                 >
@@ -579,9 +595,10 @@ D. O₂ binding to hemoglobin
             ) : (
               filteredQuestions.map((question, index) => {
                 const chosen = answers[question.id] || [];
-                const isAnswered = chosen.length > 0;
-                const isCorrect = arraysEqual(chosen, question.answers);
                 const isMultiple = question.answers.length > 1;
+                const isChecked = checkedQuestions[question.id] === true;
+                const isAnswered = isMultiple ? isChecked : chosen.length > 0;
+                const isCorrect = isAnswered && arraysEqual(chosen, question.answers);
 
                 return (
                   <section className="card question" key={question.id}>
@@ -624,6 +641,22 @@ D. O₂ binding to hemoglobin
                         );
                       })}
                     </div>
+
+                    {isMultiple && !isChecked && (
+                      <>
+                        <div className="hint">Select all answers you think are correct, then check.</div>
+                        <div className="check-row">
+                          <button
+                            className="primary"
+                            onClick={() => checkMultipleAnswer(question.id)}
+                            disabled={chosen.length === 0}
+                            style={{ opacity: chosen.length === 0 ? 0.5 : 1, cursor: chosen.length === 0 ? "not-allowed" : "pointer" }}
+                          >
+                            Check Answer
+                          </button>
+                        </div>
+                      </>
+                    )}
 
                     {isAnswered && (
                       <div className="explanation"><b>Explanation:</b> {question.explanation}</div>
