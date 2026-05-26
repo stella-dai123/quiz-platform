@@ -324,6 +324,33 @@ D. O₂ binding to hemoglobin
     setNewSubjectName("");
   }
 
+  function renameSubject() {
+    if (!selectedSubject) return;
+    const nextName = prompt("Rename subject:", selectedSubject.name);
+    if (!nextName || !nextName.trim()) return;
+    setSubjects((prev) =>
+      prev.map((subject) =>
+        subject.id === selectedSubject.id ? { ...subject, name: nextName.trim() } : subject
+      )
+    );
+  }
+
+  function deleteSubject() {
+    if (!selectedSubject) return;
+    if (subjects.length <= 1) {
+      alert("You need at least one subject.");
+      return;
+    }
+    const ok = confirm(`Delete subject "${selectedSubject.name}" and all folders/questions inside it?`);
+    if (!ok) return;
+    const updated = subjects.filter((subject) => subject.id !== selectedSubject.id);
+    setSubjects(updated);
+    setSelectedSubjectId(updated[0].id);
+    setSelectedFolderId(updated[0].folders[0]?.id || "");
+    setAnswers({});
+    setCheckedQuestions({});
+  }
+
   function addFolder() {
     const name = newFolderName.trim();
     if (!name || !selectedSubject) return;
@@ -339,6 +366,49 @@ D. O₂ binding to hemoglobin
     setNewFolderName("");
     setAnswers({});
     setCheckedQuestions({});
+  }
+
+  function renameFolder(folderId) {
+    if (!selectedSubject) return;
+    const folder = selectedSubject.folders.find((f) => f.id === folderId);
+    if (!folder) return;
+    const nextName = prompt("Rename folder:", folder.name);
+    if (!nextName || !nextName.trim()) return;
+    setSubjects((prev) =>
+      prev.map((subject) =>
+        subject.id === selectedSubject.id
+          ? {
+              ...subject,
+              folders: subject.folders.map((f) =>
+                f.id === folderId ? { ...f, name: nextName.trim() } : f
+              ),
+            }
+          : subject
+      )
+    );
+  }
+
+  function deleteFolder(folderId) {
+    if (!selectedSubject) return;
+    if (selectedSubject.folders.length <= 1) {
+      alert("You need at least one folder in each subject.");
+      return;
+    }
+    const folder = selectedSubject.folders.find((f) => f.id === folderId);
+    if (!folder) return;
+    const ok = confirm(`Delete folder "${folder.name}" and all questions inside it?`);
+    if (!ok) return;
+    const remainingFolders = selectedSubject.folders.filter((f) => f.id !== folderId);
+    setSubjects((prev) =>
+      prev.map((subject) =>
+        subject.id === selectedSubject.id ? { ...subject, folders: remainingFolders } : subject
+      )
+    );
+    if (selectedFolderId === folderId) {
+      setSelectedFolderId(remainingFolders[0]?.id || "");
+      setAnswers({});
+      setCheckedQuestions({});
+    }
   }
 
   function importQuestions() {
@@ -452,7 +522,10 @@ D. O₂ binding to hemoglobin
         .stat-label { font-size: 12px; color: #64748b; margin-top: 2px; }
         .folder-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 18px; }
         .folder-row.compact { margin-top: 0; max-height: 46px; overflow: auto; }
-        .folder-chip { border: none; padding: 10px 14px; border-radius: 999px; cursor: pointer; font-weight: 800; }
+        .folder-chip { border: none; padding: 10px 14px; border-radius: 999px; cursor: pointer; font-weight: 800; display: inline-flex; align-items: center; gap: 8px; }
+        .tiny-action { border: none; background: rgba(15,23,42,.08); color: inherit; border-radius: 8px; padding: 3px 7px; cursor: pointer; font-weight: 900; }
+        .tiny-action:hover { background: rgba(15,23,42,.16); }
+        .subject-tools { display: flex; gap: 6px; align-items: center; }
         .folder-chip.active { background: #111827; color: white; }
         .folder-chip:not(.active) { background: #f1f5f9; color: #475569; }
         .import-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; cursor: pointer; }
@@ -498,6 +571,10 @@ D. O₂ binding to hemoglobin
                 <option key={subject.id} value={subject.id}>{subject.name}</option>
               ))}
             </select>
+            <div className="subject-tools">
+              <button className="tiny-action" onClick={renameSubject} title="Rename subject">✎ Rename</button>
+              <button className="tiny-action" onClick={deleteSubject} title="Delete subject">× Delete</button>
+            </div>
           </div>
 
           <div className="toolbar-group grow">
@@ -514,7 +591,27 @@ D. O₂ binding to hemoglobin
                     setMessage("");
                   }}
                 >
-                  {folder.name}
+                  <span>{folder.name}</span>
+                  <button
+                    className="tiny-action"
+                    title="Rename folder"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      renameFolder(folder.id);
+                    }}
+                  >
+                    ✎
+                  </button>
+                  <button
+                    className="tiny-action"
+                    title="Delete folder"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteFolder(folder.id);
+                    }}
+                  >
+                    ×
+                  </button>
                 </button>
               ))}
             </div>
